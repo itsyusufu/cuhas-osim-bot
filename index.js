@@ -32,21 +32,87 @@ async function loginAndGo(regNo, password, url) {
 
 async function scrapeTable(page) {
     return page.evaluate(() => {
-        const rows = document.querySelectorAll('table tr');
-        if (!rows.length) return null;
-        let text = '';
-        rows.forEach(row => {
-            const cells = row.querySelectorAll('td, th');
-            const line = Array.from(cells).map(c => c.innerText.trim()).filter(t => t).join(' | ');
-            if (line) text += line + '\n';
+        const tables = document.querySelectorAll('table');
+        if (!tables.length) return null;
+        let result = '';
+        tables.forEach(table => {
+            const rows = table.querySelectorAll('tr');
+            rows.forEach(row => {
+                const cells = row.querySelectorAll('td, th');
+                const line = Array.from(cells).map(c => c.innerText.trim()).filter(t => t).join(' | ');
+                if (line) result += line + '\n';
+            });
+            result += '\n';
         });
-        return text || null;
+        return result.trim() || null;
     });
+}
+
+function formatFees(raw) {
+    if (!raw) return 'No fee data found.';
+    const lines = raw.split('\n').filter(l => l.trim());
+    let output = '💰 FEE SUMMARY\n';
+    output += '─────────────────\n';
+    
+    lines.forEach(line => {
+        if (line.includes('BALANCE')) return;
+        if (line.includes('Total')) {
+            output += '\n' + line + '\n';
+        } else if (line.includes('Payment-Complete')) {
+            output += '✅ ' + line + '\n';
+        } else if (line.includes('Payment-Incomplete')) {
+            output += '⚠️ ' + line + '\n';
+        } else {
+            output += line + '\n';
+        }
+    });
+    return output;
+}
+
+function formatResults(raw) {
+    if (!raw) return 'No results found.';
+    const lines = raw.split('\n').filter(l => l.trim());
+    let output = '📊 ACADEMIC RESULTS\n';
+    output += '─────────────────\n';
+    lines.forEach(line => {
+        if (line.includes('GRADE') || line.includes('PASS') || line.includes('FAIL')) {
+            output += '📝 ' + line + '\n';
+        } else {
+            output += line + '\n';
+        }
+    });
+    return output;
+}
+
+function formatTimetable(raw) {
+    if (!raw) return 'No timetable found.';
+    const lines = raw.split('\n').filter(l => l.trim());
+    let output = '📅 ACADEMIC TIMETABLE\n';
+    output += '─────────────────\n';
+    const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    lines.forEach(line => {
+        const isDay = days.some(d => line.includes(d));
+        if (isDay) {
+            output += '\n📆 ' + line + '\n';
+        } else {
+            output += line + '\n';
+        }
+    });
+    return output;
+}
+
+function chunkMessage(text, size = 4000) {
+    const chunks = [];
+    while (text.length > 0) {
+        chunks.push(text.substring(0, size));
+        text = text.substring(size);
+    }
+    return chunks;
 }
 
 bot.onText(/\/start|\/help/, (msg) => {
     bot.sendMessage(msg.chat.id,
-`Welcome to CUHAS OSIM Bot!
+`👋 Welcome to CUHAS OSIM Bot!
 
 Send your credentials in this format:
 LOGIN regNumber password
@@ -54,11 +120,12 @@ LOGIN regNumber password
 Example:
 LOGIN CUHAS/BP/1234567/T/25 yourpassword
 
-After login you can send:
-- RESULTS
-- FEES
-- TIMETABLE
-- COURSEWORK`
+After login send:
+RESULTS - Semester results
+FEES - Fee balance
+TIMETABLE - Class timetable
+COURSEWORK - Coursework results
+PROFILE - Your profile info`
     );
 });
 
@@ -75,18 +142,18 @@ bot.on('message', async (msg) => {
         }
         const regNo = parts[1];
         const password = parts.slice(2).join(' ');
-        await bot.sendMessage(chatId, 'Logging into OSIM...');
+        await bot.sendMessage(chatId, '⏳ Logging in...');
         try {
             const { browser, page } = await loginAndGo(regNo, password, null);
-            const name = await page.evaluate(() => {
-                const el = document.querySelector('.navbar-text, h4, h3, .student-name');
-                return el ? el.innerText.trim() : 'Student';
-            }).catch(() => 'Student');
+            const info = await page.evaluate(() => {
+                const nameEl = document.querySelector('.navbar-text, h4, h3');
+                return { name: nameEl ? nameEl.innerText.trim() : 'Student' };
+            }).catch(() => ({ name: 'Student' }));
             await browser.close();
             sessions[chatId] = { regNo, password };
-            await bot.sendMessage(chatId, `Logged in successfully!\nWelcome ${name}\n\nYou can now send:\n- RESULTS\n- FEES\n- TIMETABLE\n- COURSEWORK`);
+            await bot.sendMessage(chatId, `✅ Logged in successfully!\n👤 ${info.name}\n\nSend RESULTS, FEES, TIMETABLE, or COURSEWORK`);
         } catch (err) {
-            await bot.sendMessage(chatId, 'Login failed: ' + err.message);
+            await bot.sendMessage(chatId, '❌ Login failed: ' + err.message);
         }
         return;
     }
@@ -98,54 +165,28 @@ bot.on('message', async (msg) => {
 
     const { regNo, password } = sessions[chatId];
 
-    if (text.toUpperCase() === 'RESULTS') {
-        await bot.sendMessage(chatId, 'Fetching semester results...');
-        try {
-            const { browser, page } = await loginAndGo(regNo, password, 'https://osim.bugando.ac.tz/student/class/results');
-            const data = await scrapeTable(page);
-            await browser.close();
-            await bot.sendMessage(chatId, data ? 'Semester Results:\n\n' + data : 'No results found.');
-        } catch (err) {
-            await bot.sendMessage(chatId, 'Error: ' + err.message);
-        }
-        return;
-    }
+    const commands = {
+        'RESULTS': { url: 'https://osim.bugando.ac.tz/student/class/results', label: 'Fetching semester results...', format: formatResults },
+        'FEES': { url: 'https://osim.bugando.ac.tz/student/finance_info', label: 'Fetching fee balance...', format: formatFees },
+        'TIMETABLE': { url: 'https://osim.bugando.ac.tz/student/course_timetable', label: 'Fetching timetable...', format: formatTimetable },
+        'COURSEWORK': { url: 'https://osim.bugando.ac.tz/student/class/course_work', label: 'Fetching coursework...', format: (r) => '📝 COURSEWORK\n─────────────────\n' + (r || 'No data found.') },
+        'PROFILE': { url: 'https://osim.bugando.ac.tz/student/class/results', label: 'Fetching profile...', format: (r) => '👤 PROFILE\n─────────────────\n' + (r || 'No data found.') },
+    };
 
-    if (text.toUpperCase() === 'FEES') {
-        await bot.sendMessage(chatId, 'Fetching fee balance...');
+    const cmd = commands[text.toUpperCase()];
+    if (cmd) {
+        await bot.sendMessage(chatId, '⏳ ' + cmd.label);
         try {
-            const { browser, page } = await loginAndGo(regNo, password, 'https://osim.bugando.ac.tz/student/finance_info');
-            const data = await scrapeTable(page);
+            const { browser, page } = await loginAndGo(regNo, password, cmd.url);
+            const raw = await scrapeTable(page);
             await browser.close();
-            await bot.sendMessage(chatId, data ? 'Fee Information:\n\n' + data : 'No fee data found.');
+            const formatted = cmd.format(raw);
+            const chunks = chunkMessage(formatted);
+            for (const chunk of chunks) {
+                await bot.sendMessage(chatId, chunk);
+            }
         } catch (err) {
-            await bot.sendMessage(chatId, 'Error: ' + err.message);
-        }
-        return;
-    }
-
-    if (text.toUpperCase() === 'TIMETABLE') {
-        await bot.sendMessage(chatId, 'Fetching timetable...');
-        try {
-            const { browser, page } = await loginAndGo(regNo, password, 'https://osim.bugando.ac.tz/student/course_timetable');
-            const data = await scrapeTable(page);
-            await browser.close();
-            await bot.sendMessage(chatId, data ? 'Academic Timetable:\n\n' + data : 'No timetable found.');
-        } catch (err) {
-            await bot.sendMessage(chatId, 'Error: ' + err.message);
-        }
-        return;
-    }
-
-    if (text.toUpperCase() === 'COURSEWORK') {
-        await bot.sendMessage(chatId, 'Fetching coursework results...');
-        try {
-            const { browser, page } = await loginAndGo(regNo, password, 'https://osim.bugando.ac.tz/student/class/course_work');
-            const data = await scrapeTable(page);
-            await browser.close();
-            await bot.sendMessage(chatId, data ? 'Coursework Results:\n\n' + data : 'No coursework data found.');
-        } catch (err) {
-            await bot.sendMessage(chatId, 'Error: ' + err.message);
+            await bot.sendMessage(chatId, '❌ Error: ' + err.message);
         }
         return;
     }
