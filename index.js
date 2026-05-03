@@ -265,3 +265,36 @@ bot.onText(/\/debug/, async (msg) => {
         await bot.sendMessage(chatId, '❌ Error: ' + err.message);
     }
 });
+
+bot.onText(/\/debug2/, async (msg) => {
+    const chatId = msg.chat.id;
+    if (!sessions[chatId]) {
+        bot.sendMessage(chatId, 'Please login first.');
+        return;
+    }
+    await bot.sendMessage(chatId, 'Fetching page structure...');
+    const browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'] });
+    const page = await browser.newPage();
+    try {
+        await page.goto('https://osim.bugando.ac.tz/', { waitUntil: 'networkidle2', timeout: 30000 });
+        await page.type('input[type="text"]', sessions[chatId].regNo);
+        await page.type('input[type="password"]', sessions[chatId].password);
+        await page.click('button[type="submit"]');
+        await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 20000 });
+
+        const info = await page.evaluate(() => {
+            const links = Array.from(document.querySelectorAll('a'))
+                .map(a => a.href + ' | ' + a.innerText.trim())
+                .filter(l => l.includes('osim.bugando'))
+                .slice(0, 30)
+                .join('\n');
+            return { url: window.location.href, links };
+        });
+
+        await browser.close();
+        await bot.sendMessage(chatId, 'URL: ' + info.url + '\n\nLinks:\n' + info.links);
+    } catch (err) {
+        await browser.close();
+        await bot.sendMessage(chatId, 'Error: ' + err.message);
+    }
+});
