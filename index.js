@@ -3,298 +3,152 @@ const puppeteer = require('puppeteer');
 
 const TOKEN = '8716931500:AAGG-p4Q7p-RuBizZQcHznpSxDtMWnzX9Z8';
 const bot = new TelegramBot(TOKEN, { polling: true });
-
 const sessions = {};
 
-console.log('🤖 CUHAS OSIM Bot is running...');
+console.log('CUHAS OSIM Bot is running...');
+
+async function launchBrowser() {
+    return puppeteer.launch({
+        headless: true,
+        args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+    });
+}
+
+async function loginAndGo(regNo, password, url) {
+    const browser = await launchBrowser();
+    const page = await browser.newPage();
+    await page.goto('https://osim.bugando.ac.tz/', { waitUntil: 'networkidle2', timeout: 30000 });
+    await page.type('input[type="text"]', regNo);
+    await page.type('input[type="password"]', password);
+    await page.click('button[type="submit"]');
+    await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 20000 });
+    if (page.url().includes('login')) {
+        await browser.close();
+        throw new Error('Invalid credentials');
+    }
+    if (url) await page.goto(url, { waitUntil: 'networkidle2', timeout: 20000 });
+    return { browser, page };
+}
+
+async function scrapeTable(page) {
+    return page.evaluate(() => {
+        const rows = document.querySelectorAll('table tr');
+        if (!rows.length) return null;
+        let text = '';
+        rows.forEach(row => {
+            const cells = row.querySelectorAll('td, th');
+            const line = Array.from(cells).map(c => c.innerText.trim()).filter(t => t).join(' | ');
+            if (line) text += line + '\n';
+        });
+        return text || null;
+    });
+}
 
 bot.onText(/\/start|\/help/, (msg) => {
-    const chatId = msg.chat.id;
-    bot.sendMessage(chatId,
-`👋 *Welcome to CUHAS OSIM Bot!*
+    bot.sendMessage(msg.chat.id,
+`Welcome to CUHAS OSIM Bot!
 
-I can fetch your academic information from OSIM.
+Send your credentials in this format:
+LOGIN regNumber password
 
-Send your credentials using this format:
-\`LOGIN regNumber password\`
+Example:
+LOGIN CUHAS/BP/1234567/T/25 yourpassword
 
-*Example:*
-\`LOGIN CUHAS/BP/1234567/T/25 yourpassword\`
-
-⚠️ Your credentials are used only to fetch your data and are never stored.`, 
+After login you can send:
+- RESULTS
+- FEES
+- TIMETABLE
+- COURSEWORK`
     );
 });
 
 bot.on('message', async (msg) => {
     const chatId = msg.chat.id;
     const text = msg.text?.trim();
-
     if (!text || text.startsWith('/')) return;
 
-    // LOGIN command
     if (text.toUpperCase().startsWith('LOGIN ')) {
         const parts = text.split(' ');
         if (parts.length < 3) {
-            bot.sendMessage(chatId, '❌ Invalid format. Use:\n`LOGIN regNumber password`', );
+            bot.sendMessage(chatId, 'Invalid format. Use: LOGIN regNumber password');
             return;
         }
-
         const regNo = parts[1];
         const password = parts.slice(2).join(' ');
-
-        await bot.sendMessage(chatId, '⏳ Logging into OSIM, please wait...');
-
+        await bot.sendMessage(chatId, 'Logging into OSIM...');
         try {
-            const result = await loginOSIM(regNo, password);
-            sessions[chatId] = { regNo, password, page: null };
-            await bot.sendMessage(chatId, result, );
+            const { browser, page } = await loginAndGo(regNo, password, null);
+            const name = await page.evaluate(() => {
+                const el = document.querySelector('.navbar-text, h4, h3, .student-name');
+                return el ? el.innerText.trim() : 'Student';
+            }).catch(() => 'Student');
+            await browser.close();
+            sessions[chatId] = { regNo, password };
+            await bot.sendMessage(chatId, `Logged in successfully!\nWelcome ${name}\n\nYou can now send:\n- RESULTS\n- FEES\n- TIMETABLE\n- COURSEWORK`);
         } catch (err) {
-            await bot.sendMessage(chatId, `❌ Failed: ${err.message}`);
+            await bot.sendMessage(chatId, 'Login failed: ' + err.message);
         }
         return;
     }
 
-    // RESULTS command
+    if (!sessions[chatId]) {
+        bot.sendMessage(chatId, 'Please login first. Send /start for instructions.');
+        return;
+    }
+
+    const { regNo, password } = sessions[chatId];
+
     if (text.toUpperCase() === 'RESULTS') {
-        if (!sessions[chatId]) {
-            bot.sendMessage(chatId, '⚠️ Please login first using:\n`LOGIN regNumber password`', );
-            return;
-        }
-        await bot.sendMessage(chatId, '⏳ Fetching your results...');
+        await bot.sendMessage(chatId, 'Fetching semester results...');
         try {
-            const result = await fetchResults(sessions[chatId].regNo, sessions[chatId].password);
-            await bot.sendMessage(chatId, result, );
+            const { browser, page } = await loginAndGo(regNo, password, 'https://osim.bugando.ac.tz/student/class/results');
+            const data = await scrapeTable(page);
+            await browser.close();
+            await bot.sendMessage(chatId, data ? 'Semester Results:\n\n' + data : 'No results found.');
         } catch (err) {
-            await bot.sendMessage(chatId, `❌ Failed: ${err.message}`);
+            await bot.sendMessage(chatId, 'Error: ' + err.message);
         }
         return;
     }
 
-    // FEES command
     if (text.toUpperCase() === 'FEES') {
-        if (!sessions[chatId]) {
-            bot.sendMessage(chatId, '⚠️ Please login first using:\n`LOGIN regNumber password`', );
-            return;
-        }
-        await bot.sendMessage(chatId, '⏳ Fetching your fee balance...');
+        await bot.sendMessage(chatId, 'Fetching fee balance...');
         try {
-            const result = await fetchFees(sessions[chatId].regNo, sessions[chatId].password);
-            await bot.sendMessage(chatId, result, );
+            const { browser, page } = await loginAndGo(regNo, password, 'https://osim.bugando.ac.tz/student/finance_info');
+            const data = await scrapeTable(page);
+            await browser.close();
+            await bot.sendMessage(chatId, data ? 'Fee Information:\n\n' + data : 'No fee data found.');
         } catch (err) {
-            await bot.sendMessage(chatId, `❌ Failed: ${err.message}`);
+            await bot.sendMessage(chatId, 'Error: ' + err.message);
         }
         return;
     }
 
-    // TIMETABLE command
     if (text.toUpperCase() === 'TIMETABLE') {
-        if (!sessions[chatId]) {
-            bot.sendMessage(chatId, '⚠️ Please login first using:\n`LOGIN regNumber password`', );
-            return;
-        }
-        await bot.sendMessage(chatId, '⏳ Fetching your timetable...');
+        await bot.sendMessage(chatId, 'Fetching timetable...');
         try {
-            const result = await fetchTimetable(sessions[chatId].regNo, sessions[chatId].password);
-            await bot.sendMessage(chatId, result, );
+            const { browser, page } = await loginAndGo(regNo, password, 'https://osim.bugando.ac.tz/student/course_timetable');
+            const data = await scrapeTable(page);
+            await browser.close();
+            await bot.sendMessage(chatId, data ? 'Academic Timetable:\n\n' + data : 'No timetable found.');
         } catch (err) {
-            await bot.sendMessage(chatId, `❌ Failed: ${err.message}`);
+            await bot.sendMessage(chatId, 'Error: ' + err.message);
         }
         return;
     }
 
-    bot.sendMessage(chatId, 'Send /start for instructions.');
-});
-
-async function loginOSIM(regNo, password) {
-    const browser = await puppeteer.launch({
-        headless: true,
-        args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
-    });
-    const page = await browser.newPage();
-
-    try {
-        await page.goto('https://osim.bugando.ac.tz/', { waitUntil: 'networkidle2', timeout: 30000 });
-        await page.type('input[type="text"]', regNo);
-        await page.type('input[type="password"]', password);
-        await page.click('button[type="submit"]');
-        await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 20000 });
-
-        const url = page.url();
-        if (url.includes('login')) throw new Error('Invalid credentials');
-
-        const name = await page.evaluate(() => {
-            const el = document.querySelector('.navbar-text, .student-name, .user-name, h4, h3');
-            return el ? el.innerText.trim() : 'Student';
-        }).catch(() => 'Student');
-
-        await browser.close();
-
-        return `✅ *Logged in successfully!*\n👤 *${name}*\n\nWhat would you like to check?\n• RESULTS\n• FEES\n• TIMETABLE`;
-
-    } catch (err) {
-        await browser.close();
-        throw err;
-    }
-}
-
-async function fetchResults(regNo, password) {
-    const browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox'] });
-    const page = await browser.newPage();
-    try {
-        await page.goto('https://osim.bugando.ac.tz/', { waitUntil: 'networkidle2', timeout: 30000 });
-        await page.type('input[type="text"]', regNo);
-        await page.type('input[type="password"]', password);
-        await page.click('button[type="submit"]');
-        await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 20000 });
-
-        // Navigate to results page
-        await page.goto('https://osim.bugando.ac.tz/students/results', { waitUntil: 'networkidle2', timeout: 20000 });
-
-        const results = await page.evaluate(() => {
-            const rows = document.querySelectorAll('table tr');
-            if (!rows.length) return 'No results found.';
-            let text = '';
-            rows.forEach(row => {
-                const cells = row.querySelectorAll('td, th');
-                const line = Array.from(cells).map(c => c.innerText.trim()).join(' | ');
-                if (line.trim()) text += line + '\n';
-            });
-            return text || 'No results data found.';
-        });
-
-        await browser.close();
-        return `📊 *Your Results:*\n\n\`\`\`\n${results}\`\`\``;
-    } catch (err) {
-        await browser.close();
-        throw err;
-    }
-}
-
-async function fetchFees(regNo, password) {
-    const browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox'] });
-    const page = await browser.newPage();
-    try {
-        await page.goto('https://osim.bugando.ac.tz/', { waitUntil: 'networkidle2', timeout: 30000 });
-        await page.type('input[type="text"]', regNo);
-        await page.type('input[type="password"]', password);
-        await page.click('button[type="submit"]');
-        await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 20000 });
-
-        await page.goto('https://osim.bugando.ac.tz/students/fees', { waitUntil: 'networkidle2', timeout: 20000 });
-
-        const fees = await page.evaluate(() => {
-            const rows = document.querySelectorAll('table tr');
-            if (!rows.length) return 'No fee information found.';
-            let text = '';
-            rows.forEach(row => {
-                const cells = row.querySelectorAll('td, th');
-                const line = Array.from(cells).map(c => c.innerText.trim()).join(' | ');
-                if (line.trim()) text += line + '\n';
-            });
-            return text || 'No fee data found.';
-        });
-
-        await browser.close();
-        return `💰 *Your Fee Balance:*\n\n\`\`\`\n${fees}\`\`\``;
-    } catch (err) {
-        await browser.close();
-        throw err;
-    }
-}
-
-async function fetchTimetable(regNo, password) {
-    const browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox'] });
-    const page = await browser.newPage();
-    try {
-        await page.goto('https://osim.bugando.ac.tz/', { waitUntil: 'networkidle2', timeout: 30000 });
-        await page.type('input[type="text"]', regNo);
-        await page.type('input[type="password"]', password);
-        await page.click('button[type="submit"]');
-        await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 20000 });
-
-        await page.goto('https://osim.bugando.ac.tz/students/timetable', { waitUntil: 'networkidle2', timeout: 20000 });
-
-        const timetable = await page.evaluate(() => {
-            const rows = document.querySelectorAll('table tr');
-            if (!rows.length) return 'No timetable found.';
-            let text = '';
-            rows.forEach(row => {
-                const cells = row.querySelectorAll('td, th');
-                const line = Array.from(cells).map(c => c.innerText.trim()).join(' | ');
-                if (line.trim()) text += line + '\n';
-            });
-            return text || 'No timetable data found.';
-        });
-
-        await browser.close();
-        return `📅 *Your Timetable:*\n\n\`\`\`\n${timetable}\`\`\``;
-    } catch (err) {
-        await browser.close();
-        throw err;
-    }
-}
-
-bot.onText(/\/debug/, async (msg) => {
-    const chatId = msg.chat.id;
-    if (!sessions[chatId]) {
-        bot.sendMessage(chatId, '⚠️ Please login first.');
+    if (text.toUpperCase() === 'COURSEWORK') {
+        await bot.sendMessage(chatId, 'Fetching coursework results...');
+        try {
+            const { browser, page } = await loginAndGo(regNo, password, 'https://osim.bugando.ac.tz/student/class/course_work');
+            const data = await scrapeTable(page);
+            await browser.close();
+            await bot.sendMessage(chatId, data ? 'Coursework Results:\n\n' + data : 'No coursework data found.');
+        } catch (err) {
+            await bot.sendMessage(chatId, 'Error: ' + err.message);
+        }
         return;
     }
-    await bot.sendMessage(chatId, '⏳ Fetching page structure...');
-    const browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'] });
-    const page = await browser.newPage();
-    try {
-        await page.goto('https://osim.bugando.ac.tz/', { waitUntil: 'networkidle2', timeout: 30000 });
-        await page.type('input[type="text"]', sessions[chatId].regNo);
-        await page.type('input[type="password"]', sessions[chatId].password);
-        await page.click('button[type="submit"]');
-        await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 20000 });
 
-        const info = await page.evaluate(() => {
-            const links = Array.from(document.querySelectorAll('a'))
-                .map(a => a.href + ' - ' + a.innerText.trim())
-                .filter(l => l.includes('osim.bugando'))
-                .join('\n');
-            return { url: window.location.href, links };
-        });
-
-        await browser.close();
-        await bot.sendMessage(chatId, `📍 *Current URL:*\n${info.url}\n\n🔗 *Available Links:*\n${info.links}`, );
-    } catch (err) {
-        await browser.close();
-        await bot.sendMessage(chatId, '❌ Error: ' + err.message);
-    }
-});
-
-bot.onText(/\/debug2/, async (msg) => {
-    const chatId = msg.chat.id;
-    if (!sessions[chatId]) {
-        bot.sendMessage(chatId, 'Please login first.');
-        return;
-    }
-    await bot.sendMessage(chatId, 'Fetching page structure...');
-    const browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'] });
-    const page = await browser.newPage();
-    try {
-        await page.goto('https://osim.bugando.ac.tz/', { waitUntil: 'networkidle2', timeout: 30000 });
-        await page.type('input[type="text"]', sessions[chatId].regNo);
-        await page.type('input[type="password"]', sessions[chatId].password);
-        await page.click('button[type="submit"]');
-        await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 20000 });
-
-        const info = await page.evaluate(() => {
-            const links = Array.from(document.querySelectorAll('a'))
-                .map(a => a.href + ' | ' + a.innerText.trim())
-                .filter(l => l.includes('osim.bugando'))
-                .slice(0, 30)
-                .join('\n');
-            return { url: window.location.href, links };
-        });
-
-        await browser.close();
-        await bot.sendMessage(chatId, 'URL: ' + info.url + '\n\nLinks:\n' + info.links);
-    } catch (err) {
-        await browser.close();
-        await bot.sendMessage(chatId, 'Error: ' + err.message);
-    }
+    bot.sendMessage(chatId, 'Unknown command. Send /start for instructions.');
 });
