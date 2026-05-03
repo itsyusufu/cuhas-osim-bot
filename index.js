@@ -22,7 +22,7 @@ Send your credentials using this format:
 \`LOGIN CUHAS/BP/1234567/T/25 yourpassword\`
 
 ⚠️ Your credentials are used only to fetch your data and are never stored.`, 
-    { parse_mode: 'Markdown' });
+    );
 });
 
 bot.on('message', async (msg) => {
@@ -35,7 +35,7 @@ bot.on('message', async (msg) => {
     if (text.toUpperCase().startsWith('LOGIN ')) {
         const parts = text.split(' ');
         if (parts.length < 3) {
-            bot.sendMessage(chatId, '❌ Invalid format. Use:\n`LOGIN regNumber password`', { parse_mode: 'Markdown' });
+            bot.sendMessage(chatId, '❌ Invalid format. Use:\n`LOGIN regNumber password`', );
             return;
         }
 
@@ -47,7 +47,7 @@ bot.on('message', async (msg) => {
         try {
             const result = await loginOSIM(regNo, password);
             sessions[chatId] = { regNo, password, page: null };
-            await bot.sendMessage(chatId, result, { parse_mode: 'Markdown' });
+            await bot.sendMessage(chatId, result, );
         } catch (err) {
             await bot.sendMessage(chatId, `❌ Failed: ${err.message}`);
         }
@@ -57,13 +57,13 @@ bot.on('message', async (msg) => {
     // RESULTS command
     if (text.toUpperCase() === 'RESULTS') {
         if (!sessions[chatId]) {
-            bot.sendMessage(chatId, '⚠️ Please login first using:\n`LOGIN regNumber password`', { parse_mode: 'Markdown' });
+            bot.sendMessage(chatId, '⚠️ Please login first using:\n`LOGIN regNumber password`', );
             return;
         }
         await bot.sendMessage(chatId, '⏳ Fetching your results...');
         try {
             const result = await fetchResults(sessions[chatId].regNo, sessions[chatId].password);
-            await bot.sendMessage(chatId, result, { parse_mode: 'Markdown' });
+            await bot.sendMessage(chatId, result, );
         } catch (err) {
             await bot.sendMessage(chatId, `❌ Failed: ${err.message}`);
         }
@@ -73,13 +73,13 @@ bot.on('message', async (msg) => {
     // FEES command
     if (text.toUpperCase() === 'FEES') {
         if (!sessions[chatId]) {
-            bot.sendMessage(chatId, '⚠️ Please login first using:\n`LOGIN regNumber password`', { parse_mode: 'Markdown' });
+            bot.sendMessage(chatId, '⚠️ Please login first using:\n`LOGIN regNumber password`', );
             return;
         }
         await bot.sendMessage(chatId, '⏳ Fetching your fee balance...');
         try {
             const result = await fetchFees(sessions[chatId].regNo, sessions[chatId].password);
-            await bot.sendMessage(chatId, result, { parse_mode: 'Markdown' });
+            await bot.sendMessage(chatId, result, );
         } catch (err) {
             await bot.sendMessage(chatId, `❌ Failed: ${err.message}`);
         }
@@ -89,13 +89,13 @@ bot.on('message', async (msg) => {
     // TIMETABLE command
     if (text.toUpperCase() === 'TIMETABLE') {
         if (!sessions[chatId]) {
-            bot.sendMessage(chatId, '⚠️ Please login first using:\n`LOGIN regNumber password`', { parse_mode: 'Markdown' });
+            bot.sendMessage(chatId, '⚠️ Please login first using:\n`LOGIN regNumber password`', );
             return;
         }
         await bot.sendMessage(chatId, '⏳ Fetching your timetable...');
         try {
             const result = await fetchTimetable(sessions[chatId].regNo, sessions[chatId].password);
-            await bot.sendMessage(chatId, result, { parse_mode: 'Markdown' });
+            await bot.sendMessage(chatId, result, );
         } catch (err) {
             await bot.sendMessage(chatId, `❌ Failed: ${err.message}`);
         }
@@ -259,7 +259,7 @@ bot.onText(/\/debug/, async (msg) => {
         });
 
         await browser.close();
-        await bot.sendMessage(chatId, `📍 *Current URL:*\n${info.url}\n\n🔗 *Available Links:*\n${info.links}`, { parse_mode: 'Markdown' });
+        await bot.sendMessage(chatId, `📍 *Current URL:*\n${info.url}\n\n🔗 *Available Links:*\n${info.links}`, );
     } catch (err) {
         await browser.close();
         await bot.sendMessage(chatId, '❌ Error: ' + err.message);
