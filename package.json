@@ -1,0 +1,20 @@
+{
+  "name": "cuhas-osim-bot",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "axios": "^1.16.0",
+    "https-proxy-agent": "^9.0.0",
+    "node-telegram-bot-api": "^0.67.0",
+    "puppeteer": "^24.42.0",
+    "socks-proxy-agent": "^10.0.0"
+  }
+}
